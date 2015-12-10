@@ -9,10 +9,11 @@ int VERBOSE	= 1;
 char script_name[] = "./gen_data/dignitary_create_script_sqlite.sql";
 
 int can_continue = 1; //boolean value; 0 means application exits
-int num_agents = 100; //number of characters to be stored in database
+int num_characters = 100; //number of characters to be stored in database
 int num_regions = 10;
 int num_principalities = 4;
-int num_factions = 20;
+int num_factions = 10;
+int num_settlements = 30;
 
 sqlite3 *db = NULL;
 
@@ -112,6 +113,7 @@ void populate_simulation(char filepath[]) {
 	char adj_list[] = "./gen_data/adjective_list.txt";
 	char princip_names[] = "./gen_data/princip_names.txt";
 	char region_names[] = "./gen_data/region_names.txt";
+	char settlement_names[] = "./gen_data/settlement_names.txt";
 	
 	char query[256];
 	char *sql = query;
@@ -120,7 +122,7 @@ void populate_simulation(char filepath[]) {
 	FILE *name_list;
 	
 	int i;
-	for (i = 0; i < num_agents; i++) {
+	for (i = 0; i < num_characters; i++) {
 		char name[128];
 		char *namept = name;
 		char f_name[64];
@@ -209,6 +211,146 @@ void populate_simulation(char filepath[]) {
 
 	}
 	if (!ret) fprintf(stderr, "Table 'region' successfully populated\n");
+	
+	//now populate table 'settlement'
+	fprintf(stderr, "Populating table 'settlement'\n");
+	for (i = 0; i < num_settlements; i++) {
+		char name[128];
+		
+		int region_id = i % num_regions; //each region should have an even number of settlements
+		int size = rand() % 10 + 1; //size from 1 to 10
+		sprintf(name, "%s", choose_random_file_line(settlement_names));
+		
+		sprintf(sql, "INSERT INTO settlement (\"id\",\"name\",\"size\",\"region_id\") VALUES (%d, \"%s\", %d, %d)", i, name, size, region_id);
+		
+		ret = sqlite3_exec(db, sql, NULL, NULL, NULL);
+		if (ret) fprintf(stderr, "Error populating settlement: %s\n", sqlite3_errmsg(db));
+	}
+	if (!ret) fprintf (stderr, "Table 'settlement' successfully populated\n");
+	
+	//now populate table characters_faction	
+	fprintf(stderr, "Populating table 'characters_faction'\n");
+	for (i = 0; i < num_factions; i++) {
+		int population = rand() % 5 + 5; //5 - 9 characters in a faction
+		int j;
+		for (j = 0; j < population; j++) {
+			sqlite3_stmt* statement;
+			int char_id = rand() % num_characters;
+			sprintf(sql, "SELECT COUNT(*) FROM characters_faction WHERE characters_id is %d", char_id);
+			int stmt_result;
+			if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) == 0) {
+				while (sqlite3_step(statement) == SQLITE_ROW) {
+					stmt_result = sqlite3_column_int(statement, 0);
+				}
+				sqlite3_finalize(statement);
+			}						
+			else fprintf (stderr, "Error populating characters_faction: %s\n", sqlite3_errmsg(db));
+			while (stmt_result != 0) {
+				char_id = rand() % num_characters;
+				sprintf(sql, "SELECT count(*) FROM characters_faction WHERE characters_id is %d", char_id);
+				if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) == 0) {
+					while (sqlite3_step(statement) == SQLITE_ROW) {
+						stmt_result = sqlite3_column_int(statement, 0);
+					}
+				sqlite3_finalize(statement);
+				}
+				else fprintf (stderr, "Error populating characters_faction: %s\n", sqlite3_errmsg(db));
+			}
+			
+			//at this point char_id is a character not yet in a faction
+			int rank = rand() % 10 + 1;
+			sprintf(sql, "INSERT INTO characters_faction (\"faction_id\", \"rank\", \"characters_id\") VALUES (%d, %d, %d)", i, rank, char_id);
+			ret = sqlite3_exec (db, sql, NULL, NULL, NULL);
+			if (ret) fprintf (stderr, "Error populating characters_faction: %s\n", sqlite3_errmsg(db));
+		}
+	}
+	if (!ret) fprintf (stderr, "Table 'characters_faction' successfully populated\n");
+	
+	//now populate region_resource
+	fprintf(stderr, "Populating table 'region_resource'\n");
+	for (i = 0; i < num_regions; i++) {
+		int num_resources = rand() % (sizeof resource_list /sizeof (resource_list[0]) - 3) + 2; //between 2 and 4 resources per region
+		int j;
+		char* chosen_resources[num_resources];
+		int itr;
+		for (itr = 0; itr < num_resources; itr++) chosen_resources[itr] = NULL;
+		for (j = 0; j < num_resources; j++) {
+			int resource_index = rand() % sizeof resource_list / sizeof resource_list[0];
+			int k;
+			int already_chosen = 1;
+			while (already_chosen) {
+				already_chosen = 0;
+				for (k = 0; k < num_resources; k++) {
+					if (chosen_resources[k] == resource_list[resource_index]) {
+						already_chosen = 1;
+					}
+				}
+				if (already_chosen) resource_index = rand() % num_resources;
+			}
+			//at this point resource_index is the index of a resource not already in chosen_resources
+			chosen_resources[j] = resource_list[resource_index];
+			int amount = rand() % 100;
+			sprintf(sql, "INSERT INTO region_resource (\"region_id\", \"resource_id\", \"amount\") VALUES (%d, %d, %d)", i, resource_index, amount); //resources are inserted into their table in order, so resource_index corresponds to the resource_id
+			ret = sqlite3_exec(db, sql, NULL, NULL, NULL);
+			if (ret) fprintf (stderr, "Error populating region_resource: %s\n", sqlite3_errmsg(db));
+		}
+	}
+	if (!ret) fprintf (stderr, "Table 'region_resource' successfully populated\n");
+	
+	//now populate resource_market_value
+	fprintf(stderr, "Populating table 'resource_market_value'\n");
+	for (i = 0; i < num_settlements; i++) {
+		int j;
+		for (j = 0; j < sizeof resource_list / sizeof resource_list[0]; j++) {
+			float value = rand() % 100 + 1;
+			sprintf(sql, "INSERT INTO resource_market_value (\"settlement_id\", \"resource_id\", \"market_value\") VALUES (%d, %d, %f)", i, j, value);
+			ret = sqlite3_exec(db, sql, NULL, NULL, NULL);
+			if (ret) fprintf (stderr, "Error populating resource_market_value: %s\n", sqlite3_errmsg(db));
+		}
+	}
+	if (!ret) fprintf (stderr, "Table 'resource_market_value' successfully populated\n");
+
+	//add foreign keys
+	fprintf(stderr, "Adding foreign keys...\n");
+	
+	//principalities have a capital city
+	fprintf(stderr, "Adding foreign key 'capital_city_id' to table 'principality'\n");
+	sprintf(sql, "ALTER TABLE principality ADD COLUMN capital_city_id INTEGER REFERENCES settlement (id)");
+	ret = sqlite3_exec(db, sql, NULL, NULL, NULL);
+	if (ret) fprintf(stderr, "Error adding foreign key to table 'principality': %s\n", sqlite3_errmsg(db));
+	else {
+		sqlite3_stmt* statement;
+		for (i = 0; i < num_principalities; i++) {
+			//first get all settlements in regions ruled by principality
+			int settlement_list[num_settlements]; //this list is going to be way bigger than necessary - fix later?
+			sprintf(sql, "SELECT settlement.id FROM region JOIN settlement ON region.id = settlement.region_id JOIN principality ON region.ruling_principality_id = principality.id WHERE principality.id is %d", i);
+			
+			if (sqlite3_prepare_v2(db, sql, -1, &statement, NULL) == SQLITE_OK) {				
+				int index = 0;
+				int total_settlements = 0;
+				int capital_id;
+				while (sqlite3_step(statement) == SQLITE_ROW) {
+					settlement_list[index] = sqlite3_column_int(statement, 0);
+					total_settlements++;
+					index++;
+				}
+				sqlite3_finalize(statement);
+				capital_id = settlement_list[rand() % total_settlements];
+				
+				sprintf(sql, "UPDATE principality SET capital_city_id=%d WHERE id=%d", capital_id, i);
+				ret = sqlite3_exec(db, sql, NULL, NULL, NULL);
+				if (ret) fprintf (stderr, "Error adding foreign key to table 'principality': %s\n", sqlite3_errmsg(db));
+			}
+			else fprintf (stderr, "Error adding foreign key to table 'principality': %s\n", sqlite3_errmsg(db));
+		}
+	}
+	if (!ret) fprintf (stderr, "Foreign key 'capital_city_id' added to table 'principality'\n");
+	
+	//now populate table 'characters_relationship'
+	fprintf(stderr, "Populating table 'characters_relationship'\n");
+	for (i = 0; i < num_characters; i++) {
+		
+	}
 	
 	sqlite3_close(db);
 }
